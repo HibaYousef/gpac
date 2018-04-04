@@ -40,7 +40,7 @@
 #endif
 
 #include <math.h>
-
+#include <gpac/buffer_map.h>
 
 #ifndef GPAC_DISABLE_DASH_CLIENT
 
@@ -67,6 +67,25 @@ typedef enum {
    It corresponds to an AdaptationSet with additional live information not present in the MPD
    (e.g. current active representation)
 */
+//We need to save not only the last segment stats but the stats of the previous segments
+//in ABMA+ we store stats for the last 50 segments
+typedef struct __segment_stats segment_stats_Group;
+
+struct __segment_stats
+{
+	s32 segment_index;
+	u32 segment_download_start_time;
+	u32 segment_avg_bitrate;
+	u32 segment_total_size;
+	u32 segment_real_bitrate;
+	u32 segment_representation_index;
+	u32 segment_representation;
+	u32 segment_download_time;
+	Double segment_duration;
+}stats_last_segments[50];
+segment_stats_Group *last_segment = stats_last_segments;
+
+ typedef struct __dash_group GF_DASH_Group;
 typedef struct __dash_group GF_DASH_Group;
 
 struct __dash_client
@@ -2524,6 +2543,24 @@ static void dash_store_stats(GF_DashClient *dash, GF_DASH_Group *group, u32 byte
 		time = group->total_size;
 		time /= bytes_per_sec;
 	}
+
+	if (group->nb_cached_segments < sizeof(stats_last_segments)) {  //store the next last segment
+		last_segment++;
+	} else {
+		for (int i =0; i<sizeof(stats_last_segments);i++) { //shift and store the next last segment
+			stats_last_segments[i] = stats_last_segments[i+1];
+		}
+	}
+	last_segment->segment_index = group->download_segment_index;
+	last_segment->segment_download_start_time = group->last_segment_time;
+	last_segment->segment_avg_bitrate = bitrate;
+	last_segment->segment_total_size = group->total_size;
+	last_segment->segment_real_bitrate = group->bytes_per_sec;
+	last_segment->segment_representation_index = group->active_rep_index ;
+	last_segment->segment_representation = rep->bandwidth;
+	last_segment->segment_download_time = time;
+	last_segment->segment_duration = group->current_downloaded_segment_duration;
+
 	GF_LOG(GF_LOG_INFO, GF_LOG_DASH, ("[DASH] AS#%d got %s stats: %d bytes in %g sec (%d kbps) - duration %g sec - Media Rate: indicated %d - computed %d kbps - buffer %d ms\n", 1+gf_list_find(group->period->adaptation_sets, group->adaptation_set), url, group->total_size, time, 8*bytes_per_sec/1000, group->current_downloaded_segment_duration/1000.0, rep->bandwidth/1000, (u32) bitrate, buffer_ms));
 
 #endif
@@ -3105,6 +3142,120 @@ static s32 dash_do_rate_adaptation_bola(GF_DashClient *dash, GF_DASH_Group *grou
 		GF_LOG(GF_LOG_INFO, GF_LOG_DASH, ("[DASH] BOLA: buffer %d ms, segment number %d, new quality %d with rate %d\n", group->buffer_occupancy_ms, group->current_index, new_index, result->bandwidth));
 	}
 	return new_index;
+}
+
+static Double abma_buffer_map(double ov, double cv) {
+	double b;
+	if (ov >= 0.01 && cv >= 0.01) {
+			int ovIndx = floor(ov*100)-1,
+					cvIndx = floor(cv*100)-1;
+		b = buffer_map[ovIndx][cvIndx];
+	} else {
+			b = 0;
+	}
+	return b;
+}
+
+static Double abma_scale_to_new_level(GF_DASH_Group *group,u32 new_rep_index,u32 current_rep_index,double mean,double maxOv,double omega,double cv) {
+	GF_MPD_Representation *rep;
+	rep = gf_list_get(group->adaptation_set->representations, new_rep_index);
+	u32 new_bitrate = rep->bandwidth;
+	rep = gf_list_get(group->adaptation_set->representations, current_rep_index);
+	u32 selected_bitrate = rep->bandwidth;
+	double scale = new_bitrate / selected_bitrate;
+	double new_mean = mean * scale;
+	double newOv = MIN(omega / new_mean -1,maxOv);
+	double b = abma_buffer_map(newOv,cv);
+	return b ;
+}
+
+static s32 * calculate_mean_and_Variance () {
+	double me_va[2];
+	double sum_me =0, sum_va=0;
+	double nb_segments_stored = last_segment - stats_last_segments +1;
+	for (int i =0;i<nb_segments_stored;i++) {
+		sum_me = sum_me +  stats_last_segments[i].segment_download_time;
+	}
+	me_va[0] = sum_va / nb_segments_stored;
+	for (int i =0;i<nb_segments_stored;i++) {
+		sum_va =  sum_va + pow((stats_last_segments[i].segment_download_time - me_va[0]), 2);
+	}
+	me_va[1] = sum_va/nb_segments_stored;
+	 return me_va;
+}
+
+/**
+Adaptation Algorithm as described in
+A. Beben, P. Wisniewski, J. Mongay Batalla, and P. Krawiec. 2016.
+ABMA+: Lightweight and Ecient Algorithm for HTTP Adaptive Streaming.
+In Proc. Int.ACM Conference on Multimedia Systems (MMSys). 2:1–2:11.
+*/
+static s32 dash_do_rate_adaptation_abmaPlus(GF_DashClient *dash, GF_DASH_Group *group, GF_DASH_Group *base_group,
+												  u32 dl_rate, Double speed, Double max_available_speed, Bool force_lower_complexity,
+												  GF_MPD_Representation *rep, Bool go_up_bitrate)
+{
+	double beta =  0.1;
+	double C = 5.0; // We assume that the buffer contain a dedicated reservoir of length C segments which compensates the latency in SDT estimation
+	int  minEntries = 10; //download the first minEntries with the lowest quality
+	//double M = 15; // The size of maximum buffer size in nb of segments
+	double b; //min_buffer derived from the mapping
+	u32 new_rep;
+	double newMinbuffer;
+	u32 new_index = 0;
+	u32 new_rep_index;
+	u32 current_rep_index = last_segment->segment_representation_index;
+	double omega = group->current_downloaded_segment_duration / 1000.0;	// segment duration in seconds
+	Double M = group->buffer_max_ms / 1000.0 / omega; // The size of maximum buffer size in nb of segments
+	double mean;
+	double variance;
+	double ov;
+	double cv;
+	double maxOv = 1;
+	double maxCv = 1;
+
+	u32 nb_reps = gf_list_count(group->adaptation_set->representations);
+	u32 min_rep_index = 0;
+	u32 max_rep_index = nb_reps - 1;
+
+	if (last_segment == stats_last_segments+minEntries-1) {  //start the algo after minEntries segments
+		double * me_va = calculate_mean_and_Variance();
+		mean = me_va[0];
+		variance = me_va[1];
+		ov = MIN(omega / mean -1,maxOv);
+		cv = MIN(sqrt(variance)/mean, maxCv);
+		b  = abma_buffer_map(ov,cv);
+		if (b != 0 && b + C <= M) { //b !== 0 when (ov&&cv in <0.01,1>)
+			//Upward adaptation loop
+			GF_LOG(GF_LOG_INFO, GF_LOG_DASH, ("[DASH] ABMA+ , Upward adaptation \n"));
+			new_rep_index = current_rep_index+1; //try with the next quality
+			while ( new_rep_index <= max_rep_index) {
+				newMinbuffer = abma_scale_to_new_level(group,new_rep_index,current_rep_index,mean,maxOv,omega,cv);
+				if( newMinbuffer!= 0 && newMinbuffer + C <= (1- beta )* M ) { //the new quality works, save it and try with the next
+				 	current_rep_index = new_rep_index;
+				 	b =  newMinbuffer;
+				 	new_rep_index++;
+			 	}
+			 	else {
+					break; //  new quality desn't work, keep the previous one
+			 	}
+			}
+			new_index =  current_rep_index;
+		}
+		else { //Downward adaptation loop
+			GF_LOG(GF_LOG_INFO, GF_LOG_DASH, ("[DASH] ABMA+ , Downward adaptation \n"));
+			while (current_rep_index > min_rep_index && (b == 0 || b + C > M )) {
+				b = abma_scale_to_new_level(group,current_rep_index -1,current_rep_index,mean,maxOv,omega,cv);
+				current_rep_index--;
+			}
+		}
+	}
+	if (new_index != -1) {
+		GF_MPD_Representation *result = gf_list_get(group->adaptation_set->representations, (u32)new_index);
+		// increment the segment number for debug purposes
+		group->current_index++;
+		GF_LOG(GF_LOG_INFO, GF_LOG_DASH, ("[DASH] ABMA+: buffer %d ms, segment number %d, new quality %d with rate %d\n", group->buffer_occupancy_ms, group->current_index, new_index, result->bandwidth));
+	}
+	return  new_index;
 }
 
 /* This function is called each time a new segment has been downloaded */
@@ -6710,6 +6861,10 @@ void gf_dash_set_algo(GF_DashClient *dash, GF_DASHAdaptationAlgorithm algo)
 		dash->rate_adaptation_algo = dash_do_rate_adaptation_bola;
 		dash->rate_adaptation_download_monitor = dash_do_rate_monitor_default;
 		break;
+	case GF_DASH_ALGO_ABMA_PLUS:
+		dash->rate_adaptation_algo = dash_do_rate_adaptation_abmaPlus;
+		dash->rate_adaptation_download_monitor = dash_do_rate_monitor_default;
+		break;
 	case GF_DASH_ALGO_NONE:
 	default:
 		dash->rate_adaptation_algo = NULL;
@@ -8293,4 +8448,3 @@ GF_Err gf_dash_group_set_visible_rect(GF_DashClient *dash, u32 idx, u32 min_x, u
 
 
 #endif //GPAC_DISABLE_DASH_CLIENT
-

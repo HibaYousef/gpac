@@ -35,7 +35,7 @@ extern "C" {
  *	\file <gpac/dash.h>
  *	\brief DASH Client API. The DASH client can be used without GPAC player but requires at least the base utils (threads, lists, NTP timing). The HTTP interface used can be either GPAC's one or any other downloader.
  */
-	
+
 /*!
  *	\addtogroup dashc_grp DASH
  *	\ingroup media_grp
@@ -271,7 +271,7 @@ void gf_dash_group_set_codec_stat(GF_DashClient *dash, u32 idx, u32 avg_dec_time
 /*sets buffer levels*/
 void gf_dash_group_set_buffer_levels(GF_DashClient *dash, u32 idx, u32 buffer_min_ms, u32 buffer_max_ms, u32 buffer_occupancy_ms);
 
-/*indicates the buffer time in ms after which the player resumes playback. This value is less or equal to the buffer_max_ms 
+/*indicates the buffer time in ms after which the player resumes playback. This value is less or equal to the buffer_max_ms
 indicated in gf_dash_group_set_buffer_levels */
 GF_Err gf_dash_group_set_max_buffer_playout(GF_DashClient *dash, u32 idx, u32 max_target_buffer_ms);
 
@@ -385,7 +385,7 @@ Bool gf_dash_is_dynamic_mpd(GF_DashClient *dash);
 /*returns minimum buffer time indicated in mpd in ms*/
 u32 gf_dash_get_min_buffer_time(GF_DashClient *dash);
 
-// gets the difference between the local UTC clock and the one reported by the server 
+// gets the difference between the local UTC clock and the one reported by the server
 s32 gf_dash_get_utc_drift_estimate(GF_DashClient *dash);
 
 //shifts UTC clock of server by shift_utc_ms so that new UTC in MPD is old + shift_utc_ms
@@ -518,7 +518,9 @@ typedef enum {
 	GF_DASH_ALGO_BOLA_FINITE,
 	GF_DASH_ALGO_BOLA_BASIC,
 	GF_DASH_ALGO_BOLA_U,
-	GF_DASH_ALGO_BOLA_O
+	GF_DASH_ALGO_BOLA_O,
+
+	GF_DASH_ALGO_ABMA_PLUS
 } GF_DASHAdaptationAlgorithm;
 
 //sets adaptation logic algorithm
@@ -536,4 +538,3 @@ void gf_dash_set_atsc_ast_shift(GF_DashClient *dash, u32 ast_shift);
 #endif
 
 #endif	/*_GF_DASH_H_*/
-

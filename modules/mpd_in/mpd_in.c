@@ -488,7 +488,7 @@ static GF_Err MPD_LoadMediaService(GF_MPD_In *mpdin, u32 group_index, const char
 				GF_MPDGroup *group;
 				GF_SAFEALLOC(group, GF_MPDGroup);
 				if (!group) return GF_OUT_OF_MEM;
-				
+
 				group->segment_ifce = segment_ifce;
 				group->segment_ifce->proxy_udta = mpdin;
 				group->segment_ifce->query_proxy = MPD_ClientQuery;
@@ -1044,6 +1044,9 @@ GF_Err MPD_ConnectService(GF_InputService *plug, GF_ClientService *serv, const c
 	else if (!strcmp(opt, "BOLA_O")) {
 		mpdin->adaptation_algorithm = GF_DASH_ALGO_BOLA_O;
 	}
+	else if (!strcmp(opt, "ABMA_PLUS")) {
+		mpdin->adaptation_algorithm = GF_DASH_ALGO_ABMA_PLUS;
+	}
 
 	opt = gf_modules_get_option((GF_BaseInterface *)plug, "DASH", "StartRepresentation");
 	if (!opt) {
@@ -1077,7 +1080,7 @@ GF_Err MPD_ConnectService(GF_InputService *plug, GF_ClientService *serv, const c
 	if (opt && !strcmp(opt, "segments")) mpdin->buffer_mode = MPDIN_BUFFER_SEGMENTS;
 	else if (opt && !strcmp(opt, "none")) mpdin->buffer_mode = MPDIN_BUFFER_NONE;
 	else mpdin->buffer_mode = MPDIN_BUFFER_MIN;
-	
+
 	opt = gf_modules_get_option((GF_BaseInterface *)plug, "DASH", "LowLatency");
 	if (!opt) gf_modules_set_option((GF_BaseInterface *)plug, "DASH", "LowLatency", "no");
 
@@ -1085,14 +1088,14 @@ GF_Err MPD_ConnectService(GF_InputService *plug, GF_ClientService *serv, const c
 	else if (opt && !strcmp(opt, "always")) mpdin->low_latency_mode = MPDIN_LOW_LATENCY_CHUNK;
 	else mpdin->low_latency_mode = MPDIN_LOW_LATENCY_NONE;
 
-	
+
 	use_threads = GF_FALSE;
 	opt = gf_modules_get_option((GF_BaseInterface *)plug, "DASH", "ThreadedDownload");
 	if (!opt) gf_modules_set_option((GF_BaseInterface *)plug, "DASH", "ThreadedDownload", "no");
 	if (opt && !strcmp(opt, "yes")) use_threads = GF_TRUE;
 
 	if (mpdin->low_latency_mode) use_threads = GF_TRUE;
-	
+
 	opt = gf_modules_get_option((GF_BaseInterface *)plug, "DASH", "AllowAbort");
 	if (!opt) gf_modules_set_option((GF_BaseInterface *)plug, "DASH", "AllowAbort", "no");
 	mpdin->allow_http_abort = (opt && !strcmp(opt, "yes")) ? GF_TRUE : GF_FALSE;
@@ -1320,7 +1323,7 @@ GF_Err MPD_ServiceCommand(GF_InputService *plug, GF_NetworkCommand *com)
 			GF_BaseInterface *pl = (GF_BaseInterface *)plug;
 			GF_DASHTileAdaptationMode tile_mode = com->switch_quality.set_tile_mode_plus_one - 1;
 			gf_dash_set_tile_adaptation_mode(mpdin->dash, tile_mode, 100);
-			
+
 			switch (tile_mode) {
 			case GF_DASH_ADAPT_TILE_ROWS: gf_modules_set_option(pl,  "DASH", "TileAdaptation", "rows"); break;
 			case GF_DASH_ADAPT_TILE_ROWS_REVERSE: gf_modules_set_option(pl,  "DASH", "TileAdaptation", "reverseRows"); break;
@@ -1342,14 +1345,14 @@ GF_Err MPD_ServiceCommand(GF_InputService *plug, GF_NetworkCommand *com)
 				if (!segment_ifce) return GF_NOT_SUPPORTED;
 				idx = MPD_GetGroupIndexForChannel(mpdin, com->play.on_channel);
 				if (idx < 0) return GF_BAD_PARAM;
-			
+
 				gf_dash_group_set_quality_degradation_hint(mpdin->dash, idx, com->switch_quality.quality_degradation);
 				if (! com->switch_quality.ID) return GF_OK;
-			
+
 				if (com->switch_quality.dependent_group_index) {
 					if (com->switch_quality.dependent_group_index > gf_dash_group_get_num_groups_depending_on(mpdin->dash, idx))
 						return GF_BAD_PARAM;
-			
+
 					idx = gf_dash_get_dependent_group_index(mpdin->dash, idx, com->switch_quality.dependent_group_index-1);
 					if (idx==-1) return GF_BAD_PARAM;
 				}
@@ -1392,9 +1395,9 @@ GF_Err MPD_ServiceCommand(GF_InputService *plug, GF_NetworkCommand *com)
 		if (com->srd.dependent_group_index) {
 			if (com->srd.dependent_group_index > gf_dash_group_get_num_groups_depending_on(mpdin->dash, idx))
 				return GF_BAD_PARAM;
-			
+
 			idx = gf_dash_get_dependent_group_index(mpdin->dash, idx, com->srd.dependent_group_index-1);
-		}		
+		}
 		res = gf_dash_group_get_srd_info(mpdin->dash, idx, NULL, &com->srd.x, &com->srd.y, &com->srd.w, &com->srd.h, &com->srd.width, &com->srd.height);
 		return res ? GF_OK : GF_NOT_SUPPORTED;
 	}
@@ -1423,7 +1426,7 @@ GF_Err MPD_ServiceCommand(GF_InputService *plug, GF_NetworkCommand *com)
 		if (com->quality_query.dependent_group_index) {
 			if (com->quality_query.dependent_group_index > gf_dash_group_get_num_groups_depending_on(mpdin->dash, idx))
 				return GF_BAD_PARAM;
-			
+
 			g_idx = gf_dash_get_dependent_group_index(mpdin->dash, idx, com->quality_query.dependent_group_index-1);
 			if (g_idx==(u32)-1) return GF_BAD_PARAM;
 			count = gf_dash_group_get_num_qualities(mpdin->dash, g_idx);
@@ -1665,7 +1668,7 @@ GF_BaseInterface *LoadInterface(u32 InterfaceType)
 	GF_SAFEALLOC(plug, GF_InputService);
 	if (!plug) return NULL;
 	GF_REGISTER_MODULE_INTERFACE(plug, GF_NET_CLIENT_INTERFACE, "GPAC MPD Loader", "gpac distribution")
-	
+
 	GF_SAFEALLOC(mpdin, GF_MPD_In);
 	if (!mpdin) {
 		gf_free(plug);
@@ -1673,7 +1676,7 @@ GF_BaseInterface *LoadInterface(u32 InterfaceType)
 	}
 	plug->priv = mpdin;
 	mpdin->plug = plug;
-	
+
 	plug->RegisterMimeTypes = MPD_RegisterMimeTypes;
 	plug->CanHandleURL = MPD_CanHandleURL;
 	plug->ConnectService = MPD_ConnectService;
